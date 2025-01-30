@@ -1,0 +1,12 @@
+pillow
+numpy
+pydicom
+scikit-image
+fastapi
+uvicorn
+python-multipart
+requests
+nibabel
+nii2dcm
+dicom2nifti
+highdicom
