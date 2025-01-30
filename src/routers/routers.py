@@ -107,12 +107,40 @@ async def dcmtonii(
         AllMRSeries = FindAllDCMSeries(TempDCMseries)
 
         OutputFilesPath = []
-        id = 1
+        id = 0
         Correctnii = nib.load(CorrectNfityPath)
 
         for Path in AllMRSeries:
             output_file = os.path.join(OutputFolder, f'vs_gk_000{id}.nii.gz')
             dicom2nifti.dicom_series_to_nifti(Path, output_file, reorient_nifti=True)
+
+            nii_img = nib.load(output_file)
+            data = nii_img.get_fdata()
+
+            current_shape = data.shape
+            affine = nii_img.affine
+
+            new_shape = (416, 488, data.shape[2])  # You can adjust the number of slices (last dimension) as needed
+
+            # Calculate the zoom factors for resizing
+            zoom_factors = [new_shape[0] / current_shape[0], 
+                            new_shape[1] / current_shape[1], 
+                            1]  # No resizing in the z-axis (slice dimension)
+
+            # Resize the data
+            resized_data = zoom(data, zoom_factors, order=1)  # 'order=1' for bilinear interpolation
+
+            # Update the affine matrix: Adjust voxel size for the first two dimensions
+            new_affine = affine
+
+            # Calculate new voxel size for the resized image (in the x and y dimensions)
+            new_voxel_size = np.array(nii_img.header.get_zooms()) * np.array(zoom_factors)
+            new_affine[0, 0] = new_voxel_size[0]
+            new_affine[1, 1] = new_voxel_size[1]
+
+            new_img = nib.Nifti1Image(resized_data, new_affine)
+            nib.save(new_img, output_file)
+
             nii_img = nib.load(output_file)
             data = nii_img.get_fdata()
             data = np.array(data, dtype=np.uint16)
@@ -238,6 +266,34 @@ async def niitodcm(
         for Path in AllMRSeries:
             output_file = os.path.join(OutputFolder, f'vs_gk_000{id}.nii.gz')
             dicom2nifti.dicom_series_to_nifti(Path, output_file, reorient_nifti=True)
+
+            nii_img = nib.load(output_file)
+            data = nii_img.get_fdata()
+
+            current_shape = data.shape
+            affine = nii_img.affine
+
+            new_shape = (416, 488, data.shape[2])  # You can adjust the number of slices (last dimension) as needed
+
+            # Calculate the zoom factors for resizing
+            zoom_factors = [new_shape[0] / current_shape[0], 
+                            new_shape[1] / current_shape[1], 
+                            1]  # No resizing in the z-axis (slice dimension)
+
+            # Resize the data
+            resized_data = zoom(data, zoom_factors, order=1)  # 'order=1' for bilinear interpolation
+
+            # Update the affine matrix: Adjust voxel size for the first two dimensions
+            new_affine = affine
+
+            # Calculate new voxel size for the resized image (in the x and y dimensions)
+            new_voxel_size = np.array(nii_img.header.get_zooms()) * np.array(zoom_factors)
+            new_affine[0, 0] = new_voxel_size[0]
+            new_affine[1, 1] = new_voxel_size[1]
+
+            new_img = nib.Nifti1Image(resized_data, new_affine)
+            nib.save(new_img, output_file)
+
             nii_img = nib.load(output_file)
             data = nii_img.get_fdata()
             data = np.array(data, dtype=np.uint16)
