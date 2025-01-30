@@ -299,10 +299,10 @@ async def niitodcm(
             data = np.array(data, dtype=np.uint16)
             nii_img = nib.Nifti1Image(data, Correctnii.affine)
             nib.save(nii_img, output_file)
-            OutputFilesPath.append(output_file)
+            OutputFilesPath.append((Path, output_file))
         
 
-        file_path = OutputFilesPath[0]  # File to upload
+        file_path = OutputFilesPath[0][1]  # File to upload
 
 
         output_path = os.path.join(OutputFolder,"downloaded_file.nii.gz")
@@ -321,7 +321,7 @@ async def niitodcm(
                 print(f"Failed to fetch the file. Status code: {response.status_code}")
                 print(response.json())  # If the API sends error details
         
-        SegObjPath = CreateSegForMRI(AllMRSeries[0],output_path)
+        SegObjPath = CreateSegForMRI(OutputFilesPath[0][0],output_path)
 
         return FileResponse(
             path=SegObjPath,
