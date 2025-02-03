@@ -2,7 +2,7 @@ from fastapi import FastAPI, File, Form, UploadFile, HTTPException, APIRouter
 import shutil
 import os
 import uuid
-from src.utils.ImageUtils import ModifyImageForDicom
+from src.utils.ImageUtils import ModifyImageForDicom,reshape_to_HW_slices
 from src.utils.DicomUtils import ImageToDicom,fun, CreateSegForMRI
 from src.utils.FileHandlingUtils import FindAllDCMSeries
 from src.configuration.config import TempDCMseries, OutputFolder, OutputMRDir, VSmodelURL,CorrectNfityPath
@@ -15,6 +15,7 @@ import nibabel as nib
 import numpy as np
 import requests
 from scipy.ndimage import zoom
+
 
 router = APIRouter()
 
@@ -263,46 +264,67 @@ async def niitodcm(
         id = 0
         Correctnii = nib.load(CorrectNfityPath)
 
+        dicom2nifti.settings.disable_validate_slice_increment()
+        dicom2nifti.settings.disable_validate_slicecount()
+
         for Path in AllMRSeries:
             output_file = os.path.join(OutputFolder, f'vs_gk_000{id}.nii.gz')
             dicom2nifti.dicom_series_to_nifti(Path, output_file, reorient_nifti=True)
+            file1 = os.listdir(Path)
+            file1 = file1[0]
+            pixelarray = pydicom.dcmread(os.path.join(Path,file1))
+            pixelarray = pixelarray.pixel_array
 
-            nii_img = nib.load(output_file)
-            data = nii_img.get_fdata()
-
-            current_shape = data.shape
-            affine = nii_img.affine
-
-            new_shape = (416, 488, data.shape[2])  # You can adjust the number of slices (last dimension) as needed
-
-            # Calculate the zoom factors for resizing
-            zoom_factors = [new_shape[0] / current_shape[0], 
-                            new_shape[1] / current_shape[1], 
-                            1]  # No resizing in the z-axis (slice dimension)
-
-            # Resize the data
-            resized_data = zoom(data, zoom_factors, order=1)  # 'order=1' for bilinear interpolation
-
-            # Update the affine matrix: Adjust voxel size for the first two dimensions
-            new_affine = affine
-
-            # Calculate new voxel size for the resized image (in the x and y dimensions)
-            new_voxel_size = np.array(nii_img.header.get_zooms()) * np.array(zoom_factors)
-            new_affine[0, 0] = new_voxel_size[0]
-            new_affine[1, 1] = new_voxel_size[1]
-
-            new_img = nib.Nifti1Image(resized_data, new_affine)
-            nib.save(new_img, output_file)
-
-            nii_img = nib.load(output_file)
-            data = nii_img.get_fdata()
-            data = np.array(data, dtype=np.uint16)
-            nii_img = nib.Nifti1Image(data, Correctnii.affine)
-            nib.save(nii_img, output_file)
-            OutputFilesPath.append(output_file)
         
 
-        file_path = OutputFilesPath[0]  # File to upload
+
+
+            # nii_img = nib.load(output_file)
+            # data = nii_img.get_fdata()
+
+            # current_shape = data.shape
+            # affine = nii_img.affine
+
+            # new_shape = (416, 488, data.shape[2])  # You can adjust the number of slices (last dimension) as needed
+
+            # # Calculate the zoom factors for resizing
+            # zoom_factors = [new_shape[0] / current_shape[0], 
+            #                 new_shape[1] / current_shape[1], 
+            #                 1]  # No resizing in the z-axis (slice dimension)
+
+            # # Resize the data
+            # resized_data = zoom(data, zoom_factors, order=1)  # 'order=1' for bilinear interpolation
+
+            # # Update the affine matrix: Adjust voxel size for the first two dimensions
+            # new_affine = affine
+
+            # # Calculate new voxel size for the resized image (in the x and y dimensions)
+            # new_voxel_size = np.array(nii_img.header.get_zooms()) * np.array(zoom_factors)
+            # new_affine[0, 0] = new_voxel_size[0]
+            # new_affine[1, 1] = new_voxel_size[1]
+
+            # new_img = nib.Nifti1Image(resized_data, new_affine)
+            # nib.save(new_img, output_file)
+
+            nii_img = nib.load(output_file)
+            data = nii_img.get_fdata()
+            data = reshape_to_HW_slices(pixelarray,data)
+            print("resahape:-",data.shape)
+
+
+            data = np.array(data, dtype=np.uint16)
+            
+
+            nii_img = nib.Nifti1Image(data, Correctnii.affine)
+            nib.save(nii_img, output_file)
+            OutputFilesPath.append((Path,output_file))
+            id = id+ 1
+        
+
+        file_path = OutputFilesPath[0][1]  # File to upload
+        nii_img = nib.load(file_path)
+        data = nii_img.get_fdata()
+        print("sendinf nii.gz:-",data.shape)
 
 
         output_path = os.path.join(OutputFolder,"downloaded_file.nii.gz")
@@ -321,7 +343,13 @@ async def niitodcm(
                 print(f"Failed to fetch the file. Status code: {response.status_code}")
                 print(response.json())  # If the API sends error details
         
-        SegObjPath = CreateSegForMRI(AllMRSeries[0],output_path)
+        nii_img = nib.load(output_file)
+        data = nii_img.get_fdata()
+
+        nii_img = nib.Nifti1Image(data, Correctnii.affine)
+        nib.save(nii_img, output_file)
+
+        SegObjPath = CreateSegForMRI(OutputFilesPath[0][0],output_path)
 
         return FileResponse(
             path=SegObjPath,
