@@ -2,10 +2,10 @@ from fastapi import FastAPI, File, Form, UploadFile, HTTPException, APIRouter
 import shutil
 import os
 import uuid
-from src.utils.ImageUtils import ModifyImageForDicom
-from src.utils.DicomUtils import ImageToDicom,fun, CreateSegForMRI
+from src.utils.ImageUtils import ModifyImageForDicom, reshape_to_HW_slices
+from src.utils.DicomUtils import ImageToDicom,fun, CreateSegForMRI, DCMtoNifty, NewCreateSegForMRI
 from src.utils.FileHandlingUtils import FindAllDCMSeries
-from src.configuration.config import TempDCMseries, OutputFolder, OutputMRDir, VSmodelURL,CorrectNfityPath
+from src.configuration.config import TempDCMseries, OutputFolder, OutputMRDir, VSmodelURL,CorrectNfityPath, T1_Path, T2_Path, DICOM_TEMP_PATH
 from fastapi.responses import FileResponse
 import tempfile
 import pydicom
@@ -15,6 +15,10 @@ import nibabel as nib
 import numpy as np
 import requests
 from scipy.ndimage import zoom
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi import FastAPI, File, UploadFile, Response
+from src.utils import CommonUtils
+
 
 router = APIRouter()
 
@@ -330,4 +334,515 @@ async def niitodcm(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+                
+
+
+
+
+
+    
+
+@router.post("/Predictv2/")
+async def niitodcm(
+    MRI: UploadFile = File(...),
+):
+    MRI_file_extension = os.path.splitext(MRI.filename)[1]
+    temp_zip_path = os.path.join(TEMP_DIRECTORY, f"{uuid.uuid4()}{MRI_file_extension}")
+    try:
+        with open(temp_zip_path, 'wb') as tmp_file:
+            data = await MRI.read()
+            tmp_file.write(data)
+
+        os.makedirs(TempDCMseries, exist_ok=True)
+        shutil.rmtree(TempDCMseries)
+        os.makedirs(TempDCMseries, exist_ok=True)
+
+        with zipfile.ZipFile(temp_zip_path, 'r') as zip_ref:
+            zip_ref.extractall(TempDCMseries)
+        
+        AllMRSeries = FindAllDCMSeries(TempDCMseries)
+
+        os.makedirs(OutputFolder, exist_ok=True)
+        shutil.rmtree(OutputFolder)
+        os.makedirs(OutputFolder, exist_ok=True)
+
+        OutputFilesPath = []
+        id = 0
+        Correctnii = nib.load(CorrectNfityPath)
+
+        for Path in AllMRSeries:
+            OutputFileFolder = os.path.join(OutputFolder,f'vs_gk_000{id}')
+            os.makedirs(OutputFileFolder, exist_ok=True)
+            shutil.rmtree(OutputFileFolder)
+            os.makedirs(OutputFileFolder, exist_ok=True)
+
+            output_file = os.path.join(OutputFileFolder, 'vs_gk_0000.nii.gz')
+            dicom2nifti.dicom_series_to_nifti(Path, output_file, reorient_nifti=True)
+
+            file1 = os.listdir(Path)
+            file1 = file1[0]
+            pixelarray = pydicom.dcmread(os.path.join(Path,file1))
+            pixelarray = pixelarray.pixel_array
+
+            nii_img = nib.load(output_file)
+            data = nii_img.get_fdata()
+            data = reshape_to_HW_slices(pixelarray,data)
+            data = np.array(data, dtype=np.uint16)
+            nii_img = nib.Nifti1Image(data, Correctnii.affine)
+            nib.save(nii_img, output_file)
+            OutputFilesPath.append((Path, output_file))
+            id = id + 1
+        
+        selectMRI = 1
+        file_path = OutputFilesPath[selectMRI][1]  # File to upload
+
+
+        output_path = os.path.join(OutputFolder,"downloaded_file.nii.gz")
+        print("befor sending:-",file_path)
+
+        with open(file_path, "rb") as file:
+            # Send the file to the API
+            response = requests.post(VSmodelURL, files={"file": file})
+
+            # Check if the request was successful
+            if response.status_code == 200:
+                # Save the returned file
+                with open(output_path, "wb") as output_file:
+                    output_file.write(response.content)
+                print(f"File saved as {output_path}")
+            else:
+                print(f"Failed to fetch the file. Status code: {response.status_code}")
+                print(response.json())  # If the API sends error details
+        
+        SegObjPath = CreateSegForMRI(OutputFilesPath[selectMRI][0],output_path)
+
+        return FileResponse(
+            path=SegObjPath,
+            media_type="application/dicom",  # or use "application/nii" if that's more suitable
+            filename=os.path.basename(SegObjPath),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+    
+
+
+
+
+
+  
+    
+
+@router.post("/Predictv3/")
+async def niitodcm(
+    MRI: UploadFile = File(...),
+):
+    MRI_file_extension = os.path.splitext(MRI.filename)[1]
+    temp_zip_path = os.path.join(TEMP_DIRECTORY, f"{uuid.uuid4()}{MRI_file_extension}")
+    try:
+        with open(temp_zip_path, 'wb') as tmp_file:
+            data = await MRI.read()
+            tmp_file.write(data)
+
+        os.makedirs(TempDCMseries, exist_ok=True)
+        shutil.rmtree(TempDCMseries)
+        os.makedirs(TempDCMseries, exist_ok=True)
+
+        with zipfile.ZipFile(temp_zip_path, 'r') as zip_ref:
+            zip_ref.extractall(TempDCMseries)
+        
+        AllMRSeries = FindAllDCMSeries(TempDCMseries)
+
+        os.makedirs(OutputFolder, exist_ok=True)
+        shutil.rmtree(OutputFolder)
+        os.makedirs(OutputFolder, exist_ok=True)
+
+        OutputFilesPath = []
+        id = 0
+        Correctnii = nib.load(CorrectNfityPath)
+
+
+
+        for Path in AllMRSeries:
+            output_file = os.path.join(OutputFolder, f'vs_gk_000{id}.nii.gz')
+            dicom2nifti.dicom_series_to_nifti(Path, output_file, reorient_nifti=False)
+            file1 = os.listdir(Path)
+            file1 = file1[0]
+            pixelarray = pydicom.dcmread(os.path.join(Path,file1))
+            pixelarray = pixelarray.pixel_array
+
+
+            nii_img = nib.load(output_file)
+            affine = nii_img.affine
+            data = nii_img.get_fdata()
+            data = reshape_to_HW_slices(pixelarray,data)
+            print("resahape:-",data.shape)
+
+
+            data = np.array(data, dtype=np.uint16)
+            
+
+            nii_img = nib.Nifti1Image(data, Correctnii.affine)
+            nib.save(nii_img, output_file)
+            OutputFilesPath.append((Path,output_file,affine))
+            id = id+ 1
+        
+
+        file_path = OutputFilesPath[0][1]  # File to upload
+        nii_img = nib.load(file_path)
+        data = nii_img.get_fdata()
+        print("sendinf nii.gz:-",data.shape)
+
+
+        output_path = os.path.join(OutputFolder,"downloaded_file.nii.gz")
+
+        with open(file_path, "rb") as file:
+            # Send the file to the API
+            response = requests.post(VSmodelURL, files={"file": file})
+
+            # Check if the request was successful
+            if response.status_code == 200:
+                # Save the returned file
+                with open(output_path, "wb") as output_file:
+                    output_file.write(response.content)
+                print(f"File saved as {output_path}")
+            else:
+                print(f"Failed to fetch the file. Status code: {response.status_code}")
+                print(response.json())  # If the API sends error details
+        
+        print(OutputFilesPath[0][2] )
+        
+        nii_img = nib.load(output_path)
+        print("1")
+
+        data = nii_img.get_fdata()
+        print("2")
+        nii_img = nib.Nifti1Image(data, np.array(OutputFilesPath[0][2]) )
+        print("3")
+        nib.save(nii_img, output_path)
+        print("4")
+        
+
+        
+
+        
+        SegObjPath = CreateSegForMRI(OutputFilesPath[0][0],output_path)
+
+        return FileResponse(
+            path=SegObjPath,
+            media_type="application/dicom",  # or use "application/nii" if that's more suitable
+            filename=os.path.basename(SegObjPath),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+    
+
+
+
+
+
+
+
+
+
+@router.post("/Predictv4/")
+async def niitodcm(
+    MRI: UploadFile = File(...),
+):
+    MRI_file_extension = os.path.splitext(MRI.filename)[1]
+    temp_zip_path = os.path.join(TEMP_DIRECTORY, f"{uuid.uuid4()}{MRI_file_extension}")
+    try:
+        with open(temp_zip_path, 'wb') as tmp_file:
+            data = await MRI.read()
+            tmp_file.write(data)
+
+        os.makedirs(TempDCMseries, exist_ok=True)
+        shutil.rmtree(TempDCMseries)
+        os.makedirs(TempDCMseries, exist_ok=True)
+
+        with zipfile.ZipFile(temp_zip_path, 'r') as zip_ref:
+            zip_ref.extractall(TempDCMseries)
+        
+        AllMRSeries = FindAllDCMSeries(TempDCMseries)
+
+        os.makedirs(OutputFolder, exist_ok=True)
+        shutil.rmtree(OutputFolder)
+        os.makedirs(OutputFolder, exist_ok=True)
+
+        OutputFilesPath = []
+        id = 0
+        Correctnii = nib.load(CorrectNfityPath)
+
+        for Path in AllMRSeries:
+            OutputFileFolder = os.path.join(OutputFolder,f'vs_gk_000{id}')
+            os.makedirs(OutputFileFolder, exist_ok=True)
+            shutil.rmtree(OutputFileFolder)
+            os.makedirs(OutputFileFolder, exist_ok=True)
+
+            output_file = os.path.join(OutputFileFolder, 'vs_gk_0000.nii.gz')
+            dicom2nifti.dicom_series_to_nifti(Path, output_file, reorient_nifti=True)
+
+            file1 = os.listdir(Path)
+            file1 = file1[0]
+            pixelarray = pydicom.dcmread(os.path.join(Path,file1))
+            pixelarray = pixelarray.pixel_array
+
+            nii_img = nib.load(output_file)
+            data = nii_img.get_fdata()
+            # data = reshape_to_HW_slices(pixelarray,data)
+            data = np.array(data, dtype=np.uint16)
+            nii_img = nib.Nifti1Image(data, Correctnii.affine)
+            nib.save(nii_img, output_file)
+            OutputFilesPath.append((Path, output_file))
+            id = id + 1
+        
+        selectMRI = 1
+        file_path = OutputFilesPath[selectMRI][1]  # File to upload
+
+
+        output_path = os.path.join(OutputFolder,"downloaded_file.nii.gz")
+        print("befor sending:-",file_path)
+
+        with open(file_path, "rb") as file:
+            # Send the file to the API
+            response = requests.post(VSmodelURL, files={"file": file})
+
+            # Check if the request was successful
+            if response.status_code == 200:
+                # Save the returned file
+                with open(output_path, "wb") as output_file:
+                    output_file.write(response.content)
+                print(f"File saved as {output_path}")
+            else:
+                print(f"Failed to fetch the file. Status code: {response.status_code}")
+                print(response.json())  # If the API sends error details
+        
+        SegObjPath = CreateSegForMRI(OutputFilesPath[selectMRI][0],output_path)
+
+        return FileResponse(
+            path=SegObjPath,
+            media_type="application/dicom",  # or use "application/nii" if that's more suitable
+            filename=os.path.basename(SegObjPath),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+    
+
+
+
+
+
+
+@router.post("/Predictv5/")
+async def niitodcm(
+    MRI: UploadFile = File(...),
+):
+    MRI_file_extension = os.path.splitext(MRI.filename)[1]
+    temp_zip_path = os.path.join(TEMP_DIRECTORY, f"{uuid.uuid4()}{MRI_file_extension}")
+    try:
+        with open(temp_zip_path, 'wb') as tmp_file:
+            data = await MRI.read()
+            tmp_file.write(data)
+
+        os.makedirs(TempDCMseries, exist_ok=True)
+        shutil.rmtree(TempDCMseries)
+        os.makedirs(TempDCMseries, exist_ok=True)
+
+        with zipfile.ZipFile(temp_zip_path, 'r') as zip_ref:
+            zip_ref.extractall(TempDCMseries)
+        
+        AllMRSeries = FindAllDCMSeries(TempDCMseries)
+
+        os.makedirs(OutputFolder, exist_ok=True)
+        shutil.rmtree(OutputFolder)
+        os.makedirs(OutputFolder, exist_ok=True)
+
+        OutputFilesPath = []
+        id = 0
+        Correctnii = nib.load(CorrectNfityPath)
+
+
+
+        for Path in AllMRSeries:
+            output_file = os.path.join(OutputFolder, f'vs_gk_000{id}.nii.gz')
+            dicom2nifti.dicom_series_to_nifti(Path, output_file, reorient_nifti=False)
+            file1 = os.listdir(Path)
+            file1 = file1[0]
+            pixelarray = pydicom.dcmread(os.path.join(Path,file1))
+            pixelarray = pixelarray.pixel_array
+
+
+            nii_img = nib.load(output_file)
+            affine = nii_img.affine
+            data = nii_img.get_fdata()
+            # data = reshape_to_HW_slices(pixelarray,data)
+            print("resahape:-",data.shape)
+
+
+            data = np.array(data, dtype=np.uint16)
+            
+
+            nii_img = nib.Nifti1Image(data, Correctnii.affine)
+            nib.save(nii_img, output_file)
+            OutputFilesPath.append((Path,output_file,affine))
+            id = id+ 1
+        
+
+        file_path = OutputFilesPath[0][1]  # File to upload
+        nii_img = nib.load(file_path)
+        data = nii_img.get_fdata()
+        print("sendinf nii.gz:-",data.shape)
+
+
+        output_path = os.path.join(OutputFolder,"downloaded_file.nii.gz")
+
+        with open(file_path, "rb") as file:
+            # Send the file to the API
+            response = requests.post(VSmodelURL, files={"file": file})
+
+            # Check if the request was successful
+            if response.status_code == 200:
+                # Save the returned file
+                with open(output_path, "wb") as output_file:
+                    output_file.write(response.content)
+                print(f"File saved as {output_path}")
+            else:
+                print(f"Failed to fetch the file. Status code: {response.status_code}")
+                print(response.json())  # If the API sends error details
+        
+        print(OutputFilesPath[0][2] )
+        
+        nii_img = nib.load(output_path)
+        print("1")
+
+        data = nii_img.get_fdata()
+        print("2")
+        nii_img = nib.Nifti1Image(data, np.array(OutputFilesPath[0][2]) )
+        print("3")
+        nib.save(nii_img, output_path)
+        print("4")
+        
+
+        
+
+        
+        SegObjPath = CreateSegForMRI(OutputFilesPath[0][0],output_path)
+
+        return FileResponse(
+            path=SegObjPath,
+            media_type="application/dicom",  # or use "application/nii" if that's more suitable
+            filename=os.path.basename(SegObjPath),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+    
+
+
+
+
+
+@router.post("/Predictv6/")
+async def niitodcm(
+    MRI: UploadFile = File(...),
+):
+    MRI_file_extension = os.path.splitext(MRI.filename)[1]
+    temp_zip_path = os.path.join(TEMP_DIRECTORY, f"{uuid.uuid4()}{MRI_file_extension}")
+    try:
+        with open(temp_zip_path, 'wb') as tmp_file:
+            data = await MRI.read()
+            tmp_file.write(data)
+
+        os.makedirs(TempDCMseries, exist_ok=True)
+        shutil.rmtree(TempDCMseries)
+        os.makedirs(TempDCMseries, exist_ok=True)
+
+        with zipfile.ZipFile(temp_zip_path, 'r') as zip_ref:
+            zip_ref.extractall(TempDCMseries)
+        
+        AllMRSeries = FindAllDCMSeries(TempDCMseries)
+
+        os.makedirs(OutputFolder, exist_ok=True)
+        shutil.rmtree(OutputFolder)
+        os.makedirs(OutputFolder, exist_ok=True)
+
+        OutputFilesPath = []
+        id = 0
+
+        for Path in AllMRSeries:
+            output_file = os.path.join(OutputFolder, f'vs_gk_000{id}.nii.gz')
+            DCMtoNifty(Path,output_file, T1_Path )
+            nii_img = nib.load(output_file)
+            affine = nii_img.affine
+            OutputFilesPath.append((Path,output_file,affine))
+            id = id+ 1
+        
+
+        file_path = OutputFilesPath[0][1]  # File to upload
+        output_path = os.path.join(OutputFolder,"downloaded_file.nii.gz")
+
+        with open(file_path, "rb") as file:
+            # Send the file to the API
+            response = requests.post(VSmodelURL, files={"file": file})
+
+            # Check if the request was successful
+            if response.status_code == 200:
+                # Save the returned file
+                with open(output_path, "wb") as output_file:
+                    output_file.write(response.content)
+                print(f"File saved as {output_path}")
+            else:
+                print(f"Failed to fetch the file. Status code: {response.status_code}")
+                print(response.json())  # If the API sends error details
+        
+
+        SegObjPath = NewCreateSegForMRI(OutputFilesPath[0][0],output_path)
+        temp_dir_return = tempfile.mkdtemp(dir=DICOM_TEMP_PATH)
+        shutil.move(SegObjPath, temp_dir_return)
+
+        data = {
+            "file_id": os.path.basename(temp_dir_return)
+        }
+
+        return JSONResponse(content=data)
+
+        # return FileResponse(
+        #     path=SegObjPath,
+        #     media_type="application/dicom",  # or use "application/nii" if that's more suitable
+        #     filename=os.path.basename(SegObjPath),
+        # )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+    
+
+
+
+
+
+
+
+@router.get("/seg/{temp_dir}")
+async def get_seg_object(temp_dir: str):
+    try:
+        path = os.path.join(DICOM_TEMP_PATH,temp_dir, "AI.dcm")
+        dir_path = os.path.join(DICOM_TEMP_PATH,temp_dir)
+        if os.path.exists(path):
+            file_content = ""
+            with open(path, 'rb') as f:
+                file_content =f.read()
+            return Response(content=file_content, media_type="application/octet-stream")
+        else:
+            raise HTTPException(status_code=404, detail="File not found")
+    except Exception as e:
+        raise e
+    finally:
+        # Whether we had an error or not, it's important to clean up the temp directory
+        os.remove(path)
+        CommonUtils.delete_if_empty(dir_path)
+    
+
+
+
+
+                
+                
+                
                 
